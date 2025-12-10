@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.DS_Store
+.venv
+env/
+# Sensitive credentials - do not commit!
+service_account.json
+# Generated files
+*.xlsx
+# Logs
+*.log

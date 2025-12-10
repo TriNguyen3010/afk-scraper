@@ -1,0 +1,476 @@
+# -*- coding: utf-8 -*-
+import re, time, json
+import requests
+from bs4 import BeautifulSoup, NavigableString
+from openpyxl import Workbook
+from tqdm import tqdm
+
+HEADERS = {"User-Agent": "Mozilla/5.0"}
+
+# -------------------- Utils --------------------
+def tclean(s: str) -> str:
+    return re.sub(r"\s+", " ", s or "").strip()
+
+def get_soup(url: str) -> BeautifulSoup:
+    r = requests.get(url, headers=HEADERS, timeout=30)
+    r.raise_for_status()
+    return BeautifulSoup(r.text, "lxml")
+
+def heading_level(tag):
+    return int(tag.name[1]) if tag and tag.name and tag.name.startswith("h") and tag.name[1].isdigit() else 99
+
+# -------------------- Infobox & sections --------------------
+def parse_infobox_map(soup: BeautifulSoup):
+    data = {}
+    for row in soup.select(".portable-infobox .pi-data"):
+        lab = row.select_one(".pi-data-label")
+        val = row.select_one(".pi-data-value")
+        if lab and val:
+            data[tclean(lab.get_text())] = tclean(val.get_text(" ", strip=True))
+    return data
+
+def extract_section_node(soup: BeautifulSoup, titles):
+    patt = re.compile("|".join([re.escape(t) for t in titles]), flags=re.I)
+    for h in soup.select("h2,h3,h4"):
+        if patt.search(h.get_text(" ", strip=True)):
+            return h
+    return None
+
+def extract_section_text(soup: BeautifulSoup, titles):
+    start = extract_section_node(soup, titles)
+    if not start:
+        return ""
+    out = []
+    for sib in start.find_all_next():
+        if sib.name and sib.name.startswith("h"):
+            break
+        if sib.name in ("p", "li", "blockquote"):
+            txt = tclean(sib.get_text(" ", strip=True))
+            if txt:
+                out.append(txt)
+    return "\n".join(out)
+
+# -------------------- Overall (JSON-LD abstract) --------------------
+def extract_overall_jsonld(soup: BeautifulSoup) -> str:
+    script = soup.find("script", {"type": "application/ld+json"})
+    if not script:
+        return ""
+    try:
+        data = json.loads(script.string)
+        return data.get("abstract", "").strip()
+    except Exception:
+        return ""
+
+# -------------------- Quotes (Voice Lines + Other Quotes) --------------------
+def extract_quotes(soup: BeautifulSoup) -> str:
+    def gather_by_id_or_text(anchor_id, text_keyword):
+        span = soup.find("span", {"id": anchor_id})
+        if not span:
+            for h in soup.select("h2,h3,h4"):
+                if text_keyword.lower() in h.get_text(" ", strip=True).lower():
+                    span = h.find("span", class_="mw-headline") or h
+                    break
+        if not span:
+            return []
+        htag = span if span.name in ("h2","h3","h4") else span.find_parent(["h2","h3","h4"])
+        if not htag:
+            return []
+        ul = htag.find_next("ul")  # không cần sibling trực tiếp
+        if not ul:
+            return []
+        lines = []
+        for li in ul.find_all("li"):
+            txt = tclean(li.get_text())
+            if txt:
+                lines.append(txt)
+        return lines
+
+    quotes = []
+    quotes += gather_by_id_or_text("Voice_Lines", "Voice Lines")
+    quotes += gather_by_id_or_text("Other_Quotes", "Other Quotes")
+    # khử trùng lặp
+    seen, out = set(), []
+    for q in quotes:
+        if q not in seen:
+            out.append(q); seen.add(q)
+    return "\n".join(out)
+
+# -------------------- Roles (Primary / Secondary) --------------------
+ROLE_SEP_RE = re.compile(r"\s*[,/•|;]\s*")
+
+def extract_roles_from_infobox(inf: dict) -> dict:
+    """
+    Trả về {'primary': str, 'secondary': str}.
+    Ưu tiên nhãn 'Primary Role' / 'Secondary Role'.
+    Nếu chỉ có 'Role'/'Roles' → parse pattern hoặc tách danh sách.
+    """
+    out = {"primary": "", "secondary": ""}
+
+    # 1) Có trường rõ ràng
+    for k, v in inf.items():
+        lk = k.lower()
+        if "primary role" in lk or lk.strip() == "primary":
+            out["primary"] = v
+        elif "secondary role" in lk or lk.strip() == "secondary":
+            out["secondary"] = v
+
+    if out["primary"] or out["secondary"]:
+        return out
+
+    # 2) Chỉ có Role/Roles hoặc Classification
+    role_key = next((k for k in inf.keys() if k.lower() in ("role","roles")), None)
+    if not role_key:
+        role_key = next((k for k in inf.keys() if "classification" in k.lower()), None)
+
+    if role_key:
+        text = inf[role_key]
+
+        # Pattern “Primary: X … Secondary: Y …”
+        m = re.search(r"(?i)primary\s*[:\-]\s*([^;|•\n]+)", text)
+        if m:
+            out["primary"] = m.group(1).strip()
+        m = re.search(r"(?i)secondary\s*[:\-]\s*([^;|•\n]+)", text)
+        if m:
+            out["secondary"] = m.group(1).strip()
+        if out["primary"] or out["secondary"]:
+            return out
+
+        # Nếu là danh sách vai trò
+        parts = [p for p in ROLE_SEP_RE.split(text) if p]
+        if parts:
+            out["primary"] = parts[0]
+            if len(parts) > 1:
+                out["secondary"] = ", ".join(parts[1:])
+            return out
+
+    return out
+
+# -------------------- Skills --------------------
+def extract_skills_from_table(soup: BeautifulSoup) -> list:
+    """Đọc bảng Skills; trả dict có Unlock Level nếu có."""
+    skills_heading = extract_section_node(soup, ["Skills"])
+    if not skills_heading:
+        return []
+    skills_table = None
+    for tb in skills_heading.find_all_next("table"):
+        prev_h = tb.find_previous(lambda tag: getattr(tag, "name", "").startswith("h"))
+        if prev_h and prev_h is not skills_heading:
+            break
+        headers = [tclean(th.get_text(" ", strip=True)).lower() for th in tb.select("tr th")]
+        if headers and any("name" in h for h in headers) and any("description" in h for h in headers):
+            skills_table = tb
+            break
+    if not skills_table:
+        return []
+
+    header_cells = [tclean(th.get_text(" ", strip=True)).lower()
+                    for th in skills_table.select("tr")[0].find_all(["th","td"])]
+    def idx_of(key, default=None):
+        for i,h in enumerate(header_cells):
+            if key in h:
+                return i
+        return default
+    name_idx = idx_of("name")
+    desc_idx = idx_of("description")
+    unlock_idx = idx_of("unlock")  # có thể tồn tại
+    if name_idx is None or desc_idx is None:
+        return []
+
+    out = []
+    for tr in skills_table.select("tr")[1:]:
+        tds = tr.find_all(["td","th"])
+        if len(tds) <= max(name_idx, desc_idx):
+            continue
+        name = tclean(tds[name_idx].get_text(" ", strip=True))
+        desc = tclean(tds[desc_idx].get_text(" ", strip=True))
+        unlock = tclean(tds[unlock_idx].get_text(" ", strip=True)) if unlock_idx is not None and len(tds)>unlock_idx else ""
+        if name or desc or unlock:
+            out.append({"Unlock Level": unlock, "Skill Name": name, "Type": "", "Description": desc})
+    return out
+
+def extract_skills_boxes(soup: BeautifulSoup) -> list:
+    """Fallback: đọc div.skillbox; không có Unlock Level rõ, để trống."""
+    out = []
+    for box in soup.select("div.skillbox"):
+        header = box.select_one(".skillbox-header")
+        if not header:
+            continue
+        name = tclean(header.get_text(" ", strip=True))
+        typ = ""
+        small = header.find("small")
+        if small:
+            typ = tclean(small.get_text(" ", strip=True))
+        desc_parts = []
+        for d in box.select(".skillbox-description, p, li"):
+            txt = tclean(d.get_text(" ", strip=True))
+            if txt:
+                desc_parts.append(txt)
+        # bỏ trùng dòng
+        seen, dedup = set(), []
+        for line in desc_parts:
+            if line not in seen:
+                dedup.append(line); seen.add(line)
+        desc = "\n".join(dedup)
+        if name or desc:
+            out.append({"Unlock Level": "", "Skill Name": name, "Type": typ, "Description": desc})
+    return out
+
+def extract_skills(soup: BeautifulSoup) -> list:
+    skills = extract_skills_from_table(soup)
+    if skills:
+        return skills
+    return extract_skills_boxes(soup)
+
+# -------------------- Engraving Abilities (sheet riêng) --------------------
+def extract_engraving_rows(soup: BeautifulSoup, hero_name: str) -> list:
+    root = extract_section_node(soup, ["Engraving Abilities","Engraving"])
+    if not root:
+        return []
+    # ưu tiên bảng nếu có
+    table = None
+    for tb in root.find_all_next("table"):
+        prev_h = tb.find_previous(lambda tag: getattr(tag, "name","").startswith("h"))
+        if prev_h and prev_h is not root:
+            break
+        headers = [tclean(th.get_text(" ", strip=True)).lower() for th in tb.select("tr th")]
+        if headers and (any("unlock" in h for h in headers) or any("level" in h for h in headers)) and any("description" in h for h in headers):
+            table = tb
+            break
+    rows = []
+    if table:
+        header_cells = [tclean(th.get_text(" ", strip=True)).lower()
+                        for th in table.select("tr")[0].find_all(["th","td"])]
+        def idx_of(key):
+            for i,h in enumerate(header_cells):
+                if key in h:
+                    return i
+            return None
+        name_idx = idx_of("name")
+        desc_idx = idx_of("description")
+        unlock_idx = idx_of("unlock") or idx_of("level")
+        for tr in table.select("tr")[1:]:
+            tds = tr.find_all(["td","th"])
+            if not tds: continue
+            name = tclean(tds[name_idx].get_text(" ", strip=True)) if name_idx is not None and len(tds)>name_idx else ""
+            desc = tclean(tds[desc_idx].get_text(" ", strip=True)) if desc_idx is not None and len(tds)>desc_idx else ""
+            unlock = tclean(tds[unlock_idx].get_text(" ", strip=True)) if unlock_idx is not None and len(tds)>unlock_idx else ""
+            if name or desc or unlock:
+                rows.append({"Hero": hero_name, "Skill Name": name, "Unlock Level": unlock, "Description": desc})
+        return rows
+
+    # fallback: tách theo mốc E30/E60/E80 trong đoạn văn
+    text = extract_section_text(soup, ["Engraving Abilities","Engraving"])
+    parts = re.split(r"(?i)\b(E\s*30|E\s*60|E\s*80|\[30\]|\[60\]|\[80\])", text)
+    for i in range(1, len(parts), 2):
+        mark = parts[i].strip("[] ").upper().replace(" ", "")
+        desc = tclean(parts[i+1]) if i+1 < len(parts) else ""
+        rows.append({"Hero": hero_name, "Skill Name": "", "Unlock Level": mark, "Description": desc})
+    return rows
+
+# -------------------- Furniture Set Bonuses (sheet riêng) --------------------
+def extract_furniture_rows(soup: BeautifulSoup, hero_name: str) -> list:
+    root = extract_section_node(soup, ["Furniture Set Bonuses","Furniture"])
+    if not root:
+        return []
+    rows = []
+    name_h4 = root.find_next("h4")
+    name = tclean(name_h4.get_text(" ", strip=True)) if name_h4 and name_h4.find_previous(lambda t: t is root) else ""
+    ul = (name_h4.find_next("ul") if name_h4 else root.find_next("ul"))
+    desc_lines = []
+    if ul:
+        for li in ul.find_all("li"):
+            txt = tclean(li.get_text(" ", strip=True))
+            if txt: desc_lines.append(txt)
+    desc = "\n".join(desc_lines)
+    if name or desc:
+        rows.append({"Hero": hero_name, "Name": name or "Furniture", "Description": desc})
+    return rows
+
+# -------------------- Signature Item (sheet riêng – Hero | Description) --------------------
+def find_sig_heading(soup):
+    span = soup.find("span", id=re.compile(r"^signature[\s_]*item$", re.I))
+    if span:
+        h = span.find_parent(["h2","h3"])
+        if h: return h
+    for h in soup.select("h2,h3"):
+        if re.search(r"\bsignature\s+item\b", h.get_text(" ", strip=True), re.I):
+            return h
+    return None
+
+def extract_signature_item_desc(soup: BeautifulSoup) -> str:
+    root = find_sig_heading(soup)
+    if not root:
+        return ""
+    base = heading_level(root)
+    lines = []
+
+    for node in root.find_all_next():
+        if node is root:
+            continue
+        if node.name and node.name.startswith("h") and heading_level(node) <= base:
+            break
+
+        if isinstance(node, NavigableString):
+            continue
+
+        # lấy tiêu đề "Item: ..." / "Skill: ..." (h3 hoặc h4)
+        if node.name in ("h3", "h4"):
+            title = tclean(node.get_text(" ", strip=True))
+            if re.match(r"(?i)^(item|skill)\s*:", title):
+                lines.append(title)
+            continue
+
+        if node.name in ("p","blockquote"):
+            txt = tclean(node.get_text(" ", strip=True))
+            if txt:
+                lines.append(txt)
+        elif node.name == "ul":
+            for li in node.find_all("li"):
+                txt = tclean(li.get_text(" ", strip=True))
+                if txt:
+                    lines.append(txt)
+
+    # khử trùng lặp
+    seen, out = set(), []
+    for line in lines:
+        if line and line not in seen:
+            out.append(line); seen.add(line)
+    return "\n".join(out).strip()
+
+def extract_signature_rows(soup: BeautifulSoup, hero_name: str) -> list:
+    desc = extract_signature_item_desc(soup)
+    return [{"Hero": hero_name, "Description": desc}] if desc else []
+
+# -------------------- Scrape 1 hero --------------------
+def scrape_page(url: str):
+    soup = get_soup(url)
+    title = soup.select_one("#firstHeading").get_text(strip=True)
+
+    # Infobox + icon
+    inf_map = parse_infobox_map(soup)
+    roles = extract_roles_from_infobox(inf_map)   # <-- NEW
+    icon = ""
+    infobox = soup.select_one(".portable-infobox")
+    if infobox:
+        img = infobox.select_one("img")
+        if img and img.has_attr("src"):
+            icon = img["src"]
+
+    # Heroes row (đã thêm Primary/Secondary Role)
+    hero_row = {
+        "Icon": icon,
+        "Name": title,
+        "Faction": inf_map.get("Faction",""),
+        "Type":    inf_map.get("Type",""),
+        "Class":   inf_map.get("Class",""),
+        "Rarity":  inf_map.get("Rarity",""),
+        "Role":    inf_map.get("Role",""),                 # giữ Role gốc (nếu có)
+        "Primary Role": roles.get("primary",""),          # <-- NEW
+        "Secondary Role": roles.get("secondary",""),      # <-- NEW
+        "Overall": extract_overall_jsonld(soup),
+        "Personality": extract_section_text(soup, ["Personality"]),
+        "Background":  extract_section_text(soup, ["Background","Story"]),
+        "Quotes":      extract_quotes(soup),
+        "Trivia":      extract_section_text(soup, ["Trivia"]),
+        "URL": url,
+    }
+
+    # Skills
+    skills = extract_skills(soup)
+    for s in skills:
+        s["Hero"] = title
+        s.setdefault("Type","")
+
+    # Engraving / Signature / Furniture rows
+    engraving_rows = extract_engraving_rows(soup, title)
+    signature_rows = extract_signature_rows(soup, title)
+    furniture_rows = extract_furniture_rows(soup, title)
+
+    return hero_row, skills, engraving_rows, signature_rows, furniture_rows
+
+# -------------------- Write Excel --------------------
+def write_excel(heroes, skills, engraving_rows, signature_rows, furniture_rows, filename="afk_lightbearers_sample.xlsx"):
+    wb = Workbook()
+
+    # Heroes (đã thêm 2 cột Role mới)
+    hero_cols = ["Icon","Name","Faction","Type","Class","Rarity","Role",
+                 "Primary Role","Secondary Role",
+                 "Overall","Personality","Background","Quotes","Trivia","URL"]
+    ws1 = wb.active; ws1.title = "Heroes"
+    ws1.append(hero_cols)
+    for h in heroes:
+        ws1.append([h.get(c,"") for c in hero_cols])
+
+    # Skills (có Unlock Level)
+    ws2 = wb.create_sheet("Skills")
+    ws2.append(["Hero","Unlock Level","Skill Name","Type","Description"])
+    for s in skills:
+        ws2.append([s.get("Hero",""), s.get("Unlock Level",""), s.get("Skill Name",""), s.get("Type",""), s.get("Description","")])
+
+    # Engraving Abilities
+    ws3 = wb.create_sheet("Engraving Abilities")
+    ws3.append(["Hero","Skill Name","Unlock Level","Description"])
+    for r in engraving_rows:
+        ws3.append([r.get("Hero",""), r.get("Skill Name",""), r.get("Unlock Level",""), r.get("Description","")])
+
+    # Signature Item (2 cột)
+    ws4 = wb.create_sheet("Signature Item")
+    ws4.append(["Hero","Description"])
+    for r in signature_rows:
+        ws4.append([r.get("Hero",""), r.get("Description","")])
+
+    # Furniture Set Bonuses
+    ws5 = wb.create_sheet("Furniture Set Bonuses")
+    ws5.append(["Hero","Name","Description"])
+    for r in furniture_rows:
+        ws5.append([r.get("Hero",""), r.get("Name",""), r.get("Description","")])
+
+    wb.save(filename)
+
+# -------------------- Run --------------------
+def main():
+    hero_urls = [
+    "https://afk-arena.fandom.com/wiki/Estrilda",
+    "https://afk-arena.fandom.com/wiki/Belinda",
+    "https://afk-arena.fandom.com/wiki/Raine",
+    "https://afk-arena.fandom.com/wiki/Lucius",
+    "https://afk-arena.fandom.com/wiki/Thane",
+    "https://afk-arena.fandom.com/wiki/Fawkes",
+    "https://afk-arena.fandom.com/wiki/Hendrik",
+    "https://afk-arena.fandom.com/wiki/Rowan",
+    "https://afk-arena.fandom.com/wiki/Rosaline",
+    "https://afk-arena.fandom.com/wiki/Gwyneth",
+    "https://afk-arena.fandom.com/wiki/Rigby",
+    "https://afk-arena.fandom.com/wiki/Cecilia",
+    "https://afk-arena.fandom.com/wiki/Oscar",
+    "https://afk-arena.fandom.com/wiki/Eluard",
+    "https://afk-arena.fandom.com/wiki/Peggy",
+    "https://afk-arena.fandom.com/wiki/Walker",
+    "https://afk-arena.fandom.com/wiki/Morrow",
+    "https://afk-arena.fandom.com/wiki/Scarlet",
+    "https://afk-arena.fandom.com/wiki/Thane_-_The_Veiled_Wind",
+    "https://afk-arena.fandom.com/wiki/Sonja",
+    "https://afk-arena.fandom.com/wiki/Palmer",
+    "https://afk-arena.fandom.com/wiki/Hogan",
+    "https://afk-arena.fandom.com/wiki/Angelo",
+    "https://afk-arena.fandom.com/wiki/Morvus",
+    "https://afk-arena.fandom.com/wiki/Mirael",
+    "https://afk-arena.fandom.com/wiki/Merek",
+    "https://afk-arena.fandom.com/wiki/Ulric",
+]
+    heroes, all_skills = [], []
+    all_engraving, all_signature, all_furniture = [], [], []
+    for url in tqdm(hero_urls, desc="Scraping heroes"):
+        h, s, engr, sign, furn = scrape_page(url)
+        heroes.append(h)
+        all_skills.extend(s)
+        all_engraving.extend(engr)
+        all_signature.extend(sign)
+        all_furniture.extend(furn)
+        time.sleep(0.5)
+
+    write_excel(heroes, all_skills, all_engraving, all_signature, all_furniture)
+    print("✅ Done, saved afk_lightbearers_sample.xlsx")
+
+if __name__ == "__main__":
+    main()

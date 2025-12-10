@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+requests
+beautifulsoup4
+openpyxl
+lxml
+tqdm
+websockets
+gspread
+oauth2client
+

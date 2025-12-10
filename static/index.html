@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AFK Arena Wiki Scraper</title>
+    <style>
+        :root {
+            --primary: #6366f1;
+            --primary-hover: #4f46e5;
+            --bg: #0f172a;
+            --card-bg: #1e293b;
+            --text: #f8fafc;
+            --text-muted: #94a3b8;
+        }
+
+        body {
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            margin: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        .container {
+            background-color: var(--card-bg);
+            padding: 2rem;
+            border-radius: 1rem;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            width: 90%;
+            max-width: 600px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        h1 {
+            text-align: center;
+            margin-bottom: 0.5rem;
+            font-size: 2rem;
+            background: linear-gradient(to right, #818cf8, #c084fc);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        p.subtitle {
+            text-align: center;
+            color: var(--text-muted);
+            margin-bottom: 2rem;
+        }
+
+        textarea {
+            width: 100%;
+            height: 200px;
+            background-color: #020617;
+            border: 1px solid #334155;
+            color: #e2e8f0;
+            padding: 1rem;
+            border-radius: 0.5rem;
+            font-family: monospace;
+            font-size: 0.9rem;
+            resize: vertical;
+            margin-bottom: 1.5rem;
+            box-sizing: border-box;
+        }
+
+        textarea:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
+        }
+
+        .actions {
+            display: flex;
+            gap: 1rem;
+            flex-direction: column;
+        }
+
+        button {
+            background-color: var(--primary);
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 0.5rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-size: 1rem;
+        }
+
+        button:hover {
+            background-color: var(--primary-hover);
+            transform: translateY(-1px);
+        }
+
+        button:disabled {
+            background-color: #475569;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        #status {
+            margin-top: 1.5rem;
+            padding: 1rem;
+            border-radius: 0.5rem;
+            background-color: rgba(255, 255, 255, 0.05);
+            display: none;
+            text-align: center;
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 1.5rem;
+            height: 1.5rem;
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top-color: #fff;
+            animation: spin 1s ease-in-out infinite;
+            margin-right: 0.5rem;
+            vertical-align: middle;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        .download-link {
+            display: inline-block;
+            margin-top: 1rem;
+            color: #bef264;
+            text-decoration: none;
+            font-weight: bold;
+        }
+
+        .download-link:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="container">
+        <h1>AFK Arena Scraper</h1>
+        <p class="subtitle">Extract Hero Data, Skills, and Lore to Excel</p>
+
+        <div
+            style="background: rgba(255,255,255,0.03); padding: 1rem; border-radius: 0.5rem; margin-bottom: 1.5rem; border: 1px dashed #334155;">
+            <label for="factionUrl"
+                style="display:block; margin-bottom:0.5rem; color:#bef264; font-weight:bold; font-size:0.9rem;">Auto-Scan
+                Faction (Optional)</label>
+            <div style="display:flex; gap:0.5rem;">
+                <input type="text" id="factionUrl" placeholder="e.g. Wiki/Lightbearers, Wiki/Maulers"
+                    style="flex:1; padding:0.5rem; border-radius:0.25rem; border:1px solid #334155; background:#020617; color:white;">
+                <button onclick="fetchHeroes()" style="padding:0.5rem 1rem; font-size:0.9rem; background:#4f46e5;">Get
+                    Hero URLs</button>
+            </div>
+        </div>
+
+        <label for="urls" style="display:block; margin-bottom:0.5rem; color:var(--text-muted); font-size:0.9rem;">Target
+            Wiki URLs (One per line):</label>
+        <textarea id="urls">
+https://afk-arena.fandom.com/wiki/Estrilda
+https://afk-arena.fandom.com/wiki/Belinda
+</textarea>
+
+        <!-- Translation Options (Removed) -->
+
+
+        <!-- Export Options -->
+        <div
+            style="margin-top: 1rem; padding: 1rem; border: 1px solid #334155; border-radius: 0.5rem; background: rgba(0,0,0,0.2);">
+            <p style="margin-bottom: 0.5rem; font-weight: bold; color: #bef264;">Export Format:</p>
+            <div style="display: flex; gap: 1.5rem; margin-bottom: 0.5rem;">
+                <label style="cursor: pointer; display: flex; align-items: center; gap: 0.5rem;">
+                    <input type="radio" name="exportType" value="excel" onchange="toggleSheetInput()"> Excel
+                    File (.xlsx)
+                </label>
+                <label style="cursor: pointer; display: flex; align-items: center; gap: 0.5rem;">
+                    <input type="radio" name="exportType" value="google_sheet" checked onchange="toggleSheetInput()">
+                    Google
+                    Sheet
+                </label>
+            </div>
+
+            <div id="sheetConfig" style="display: block; margin-top: 0.5rem;">
+                <label for="sheetId" style="display:block; font-size:0.85rem; color:#94a3b8; margin-bottom:0.3rem;">
+                    Google Sheet ID (Make sure to share it with the Service Account email):
+                </label>
+                <input type="text" id="sheetId" value="1Y4Ah7OCqpjCEdmoWREqJfGLUalS9qrrDGeXY2J2Djvg"
+                    placeholder="e.g. 1BxiMVs0XRA5nFMdKbBdB_..."
+                    style="width: 100%; padding: 0.5rem; background: #1e293b; border: 1px solid #475569; color: white; border-radius: 0.25rem;">
+            </div>
+        </div>
+
+        <div class="actions">
+            <button id="scrapeBtn" onclick="startScraping()">
+                Start Scraping
+            </button>
+        </div>
+
+        <div id="status"></div>
+    </div>
+
+    <script>
+        function toggleSheetInput() {
+            const isSheet = document.querySelector('input[name="exportType"][value="google_sheet"]').checked;
+            document.getElementById('sheetConfig').style.display = isSheet ? 'block' : 'none';
+        }
+
+        function startScraping() {
+            const btn = document.getElementById('scrapeBtn');
+            const statusDiv = document.getElementById('status');
+            const urlsInput = document.getElementById('urls');
+
+            const exportType = document.querySelector('input[name="exportType"]:checked').value;
+            const sheetId = document.getElementById('sheetId').value.trim();
+
+
+
+            const urls = urlsInput.value.trim().split('\n').map(u => u.trim()).filter(u => u.length > 0);
+
+            if (urls.length === 0) {
+                alert("Please enter at least one URL!");
+                return;
+            }
+
+            if (exportType === 'google_sheet' && !sheetId) {
+                alert("Please enter a Google Sheet ID!");
+                return;
+            }
+
+            // Reset UI
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner"></span> Scraping...';
+            statusDiv.style.display = 'block';
+            statusDiv.innerHTML = '<p>Connecting to server...</p>';
+
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/ws/scrape`;
+            const ws = new WebSocket(wsUrl);
+
+            ws.onopen = function () {
+                statusDiv.innerHTML = '<p>Connected! Starting scan...</p>';
+                ws.send(JSON.stringify({
+                    urls: urls,
+                    export_type: exportType,
+                    sheet_id: sheetId
+                }));
+            };
+
+            ws.onmessage = function (event) {
+                const data = JSON.parse(event.data);
+
+                if (data.type === 'progress') {
+                    const percent = Math.round((data.current / data.total) * 100);
+                    statusDiv.innerHTML = `
+                        <p style="font-weight:bold; margin-bottom:0.5rem;">Processing: ${data.message}</p>
+                        <div style="width:100%; background:#334155; height:10px; border-radius:5px; overflow:hidden;">
+                            <div style="width:${percent}%; background:#6366f1; height:100%; transition:width 0.3s;"></div>
+                        </div>
+                        <p style="text-align:right; font-size:0.8rem; color:#94a3b8; margin-top:0.2rem;">${data.current} / ${data.total}</p>
+                    `;
+                } else if (data.type === 'complete') {
+                    if (data.mode === 'google_sheet') {
+                        statusDiv.innerHTML = `
+                            <p style="color:#4ade80; font-size:1.2rem; font-weight:bold;">✅ Scraping Completed!</p>
+                            <p>Processed ${data.hero_count} heroes.</p>
+                            <p style="color:#bef264;">Data successfully written to Google Sheet!</p>
+                            <a href="https://docs.google.com/spreadsheets/d/${data.sheet_id}" target="_blank" style="color:#60a5fa; text-decoration:underline;">Open Google Sheet</a>
+                        `;
+                    } else {
+                        statusDiv.innerHTML = `
+                            <p style="color:#4ade80; font-size:1.2rem; font-weight:bold;">✅ Scraping Completed!</p>
+                            <p>Processed ${data.hero_count} heroes.</p>
+                            <a href="/api/download/${data.filename}" class="download-link">Click here to Download Excel</a>
+                        `;
+                    }
+                    btn.disabled = false;
+                    btn.innerText = "Start Scraping";
+                    ws.close();
+                } else if (data.type === 'error') {
+                    statusDiv.innerHTML = `<p style="color:#f87171">❌ Error: ${data.message}</p>`;
+                    btn.disabled = false;
+                    btn.innerText = "Start Scraping";
+                    ws.close();
+                }
+            };
+
+            // ... (rest of error handling)
+            ws.onerror = function (error) {
+                console.error("WebSocket Error:", error);
+                statusDiv.innerHTML = `<p style="color:#f87171">❌ Connection Error. Is the backend running?</p>`;
+                btn.disabled = false;
+                btn.innerText = "Start Scraping";
+            };
+
+            ws.onclose = function () { };
+        }
+
+        async function fetchHeroes() {
+            const factionUrlInput = document.getElementById('factionUrl').value;
+            // Split by comma, newline, or space
+            const factionUrls = factionUrlInput.split(/[\n,;]+/).map(u => u.trim()).filter(u => u.length > 0);
+
+            if (factionUrls.length === 0) {
+                alert("Please enter at least one Faction URL!");
+                return;
+            }
+
+            const btn = document.querySelector('button[onclick="fetchHeroes()"]');
+            const originalText = btn.innerText;
+            btn.disabled = true;
+            btn.innerText = "Scanning...";
+
+            try {
+                const response = await fetch('/api/fetch_heroes', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ urls: factionUrls })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    const urlsArea = document.getElementById('urls');
+                    // Append or Replace? Let's Replace for now as per "Auto-Scan" usually implies reset, 
+                    // OR maybe the user wants to add to list? 
+                    // Let's just set the value for simplicity, user can copy paste if they want to merge manually.
+                    // Wait, previous behavior was replace. Let's stick to replace.
+                    urlsArea.value = data.heroes.join('\n');
+                    alert(`Found ${data.heroes.length} heroes from ${factionUrls.length} pages!`);
+                } else {
+                    alert("Error: " + (data.detail || "Failed to fetch heroes"));
+                }
+            } catch (e) {
+                console.error(e);
+                alert("Network error. Is the backend running?");
+            } finally {
+                btn.disabled = false;
+                btn.innerText = originalText;
+            }
+        }
+    </script>
+
+</body>
+
+</html>

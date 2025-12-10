@@ -1,0 +1,80 @@
+# check_hero_links.py
+import requests, csv, re
+from bs4 import BeautifulSoup
+from urllib.parse import urljoin
+
+HEADERS = {"User-Agent": "Mozilla/5.0"}
+
+def tclean(s): return re.sub(r"\s+", " ", s or "").strip()
+
+def find_heroes_section(soup):
+    # Ưu tiên anchor <span id="Heroes">, fallback: heading chứa chữ "Heroes"
+    span = soup.find("span", id=re.compile(r"^Heroes$", re.I))
+    if span:
+        h = span.find_parent(["h2", "h3"])
+        if h: return h
+    for h in soup.select("h2,h3"):
+        if re.search(r"\bHeroes\b", h.get_text(" ", strip=True), re.I):
+            return h
+    return None
+
+def extract_hero_links(faction_url):
+    r = requests.get(faction_url, headers=HEADERS, timeout=30)
+    r.raise_for_status()
+    soup = BeautifulSoup(r.text, "lxml")
+
+    root = find_heroes_section(soup)
+    if not root:
+        return []
+
+    base = faction_url
+    seen, out = set(), []
+
+    # duyệt các node sau heading tới trước h2/h3 kế tiếp
+    for node in root.find_all_next():
+        if node is root:
+            continue
+        if getattr(node, "name", "") in ("h2", "h3"):
+            break
+        for a in node.find_all("a", href=True):
+            name = tclean(a.get_text(" ", strip=True))
+            href = urljoin(base, a["href"])
+            if not name or href in seen:
+                continue
+            seen.add(href)
+            out.append({"name": name, "url": href})
+    return out
+
+def check_url(url):
+    try:
+        # HEAD nhanh hơn; fallback GET nếu server không hỗ trợ HEAD
+        resp = requests.head(url, headers=HEADERS, allow_redirects=True, timeout=15)
+        if resp.status_code >= 400 or resp.status_code < 200:
+            resp = requests.get(url, headers=HEADERS, allow_redirects=True, timeout=15)
+        ok = 200 <= resp.status_code < 400
+        return ok, resp.status_code
+    except requests.RequestException:
+        return False, None
+
+def main():
+    faction_url = "https://afk-arena.fandom.com/wiki/Lightbearers"
+    heroes = extract_hero_links(faction_url)
+
+    results = []
+    for h in heroes:
+        ok, code = check_url(h["url"])
+        results.append({"Hero": h["name"], "URL": h["url"], "Reachable": "Yes" if ok else "No", "HTTP": code})
+
+    # in nhanh ra console
+    for r in results:
+        print(f"{r['Hero']:30}  {r['Reachable']:3}  {r['HTTP']}  {r['URL']}")
+
+    # lưu CSV
+    with open("hero_links_lightbearers.csv", "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=["Hero","URL","Reachable","HTTP"])
+        w.writeheader()
+        w.writerows(results)
+    print("\n✅ Saved hero_links_lightbearers.csv")
+
+if __name__ == "__main__":
+    main()
