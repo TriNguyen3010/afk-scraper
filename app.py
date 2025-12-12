@@ -116,6 +116,7 @@ async def websocket_endpoint(websocket: WebSocket):
         for res in results:
             hero_data, h_skills, h_engr, h_sig, h_furn = res
             if hero_data:
+                # Append raw data, IDs are handled in export step
                 heroes.append(hero_data)
                 all_skills.extend(h_skills)
                 all_engraving.extend(h_engr)

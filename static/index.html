@@ -151,11 +151,48 @@
 
         <div
             style="background: rgba(255,255,255,0.03); padding: 1rem; border-radius: 0.5rem; margin-bottom: 1.5rem; border: 1px dashed #334155;">
-            <label for="factionUrl"
-                style="display:block; margin-bottom:0.5rem; color:#bef264; font-weight:bold; font-size:0.9rem;">Auto-Scan
-                Faction (Optional)</label>
+            <p style="color:#bef264; font-weight:bold; font-size:0.9rem; margin-top:0;">Select Factions to Scan:</p>
+            <div
+                style="display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 0.5rem; margin-bottom: 0.5rem;">
+                <!-- Default Factions -->
+                <label style="cursor: pointer; display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
+                    <input type="checkbox" class="faction-cb" value="https://afk-arena.fandom.com/wiki/Lightbearers"
+                        checked> Lightbearers
+                </label>
+                <label style="cursor: pointer; display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
+                    <input type="checkbox" class="faction-cb" value="https://afk-arena.fandom.com/wiki/Maulers" checked>
+                    Maulers
+                </label>
+                <label style="cursor: pointer; display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
+                    <input type="checkbox" class="faction-cb" value="https://afk-arena.fandom.com/wiki/Wilders" checked>
+                    Wilders
+                </label>
+                <label style="cursor: pointer; display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
+                    <input type="checkbox" class="faction-cb" value="https://afk-arena.fandom.com/wiki/Graveborns"
+                        checked> Graveborns
+                </label>
+                <label style="cursor: pointer; display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
+                    <input type="checkbox" class="faction-cb" value="https://afk-arena.fandom.com/wiki/Celestials"
+                        checked> Celestials
+                </label>
+                <label style="cursor: pointer; display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
+                    <input type="checkbox" class="faction-cb" value="https://afk-arena.fandom.com/wiki/Hypogeans"
+                        checked> Hypogeans
+                </label>
+                <label style="cursor: pointer; display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
+                    <input type="checkbox" class="faction-cb" value="https://afk-arena.fandom.com/wiki/Dimensionals"
+                        checked> Dimensionals
+                </label>
+                <label style="cursor: pointer; display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem;">
+                    <input type="checkbox" class="faction-cb" value="https://afk-arena.fandom.com/wiki/Draconis">
+                    Draconis
+                </label>
+            </div>
+
+            <label style="display:block; margin-bottom:0.3rem; font-size:0.85rem; color:#94a3b8;">Other Faction URL
+                (Optional):</label>
             <div style="display:flex; gap:0.5rem;">
-                <input type="text" id="factionUrl" placeholder="e.g. Wiki/Lightbearers, Wiki/Maulers"
+                <input type="text" id="customFactionUrl" placeholder="e.g. Wiki/Draconis"
                     style="flex:1; padding:0.5rem; border-radius:0.25rem; border:1px solid #334155; background:#020617; color:white;">
                 <button onclick="fetchHeroes()" style="padding:0.5rem 1rem; font-size:0.9rem; background:#4f46e5;">Get
                     Hero URLs</button>
@@ -304,12 +341,22 @@ https://afk-arena.fandom.com/wiki/Belinda
         }
 
         async function fetchHeroes() {
-            const factionUrlInput = document.getElementById('factionUrl').value;
-            // Split by comma, newline, or space
-            const factionUrls = factionUrlInput.split(/[\n,;]+/).map(u => u.trim()).filter(u => u.length > 0);
+            // Collect checked values
+            const checkedBoxes = Array.from(document.querySelectorAll('.faction-cb:checked'))
+                .map(cb => cb.value);
+
+            // Collect custom input
+            const customInput = document.getElementById('customFactionUrl').value.trim();
+            if (customInput) {
+                // simple validation or split by comma if user enters multiple there
+                const customs = customInput.split(/[\n,;]+/).map(u => u.trim()).filter(u => u.length > 0);
+                checkedBoxes.push(...customs);
+            }
+
+            const factionUrls = checkedBoxes;
 
             if (factionUrls.length === 0) {
-                alert("Please enter at least one Faction URL!");
+                alert("Please select at least one Faction or enter a URL!");
                 return;
             }
 
@@ -329,12 +376,9 @@ https://afk-arena.fandom.com/wiki/Belinda
 
                 if (response.ok) {
                     const urlsArea = document.getElementById('urls');
-                    // Append or Replace? Let's Replace for now as per "Auto-Scan" usually implies reset, 
-                    // OR maybe the user wants to add to list? 
-                    // Let's just set the value for simplicity, user can copy paste if they want to merge manually.
-                    // Wait, previous behavior was replace. Let's stick to replace.
+                    // Replace content with found heroes
                     urlsArea.value = data.heroes.join('\n');
-                    alert(`Found ${data.heroes.length} heroes from ${factionUrls.length} pages!`);
+                    alert(`Found ${data.heroes.length} heroes from ${factionUrls.length} factions!`);
                 } else {
                     alert("Error: " + (data.detail || "Failed to fetch heroes"));
                 }

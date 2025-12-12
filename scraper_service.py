@@ -443,6 +443,9 @@ def scrape_page(url: str):
         intro = extract_intro_text(soup)
         personality = extract_section_text(soup, ["Personality"])
         
+
+        # Prepare dict with EN/VN suffixes
+        # Map original keys to _EN keys
         hero_row = {
             "Icon": icon,
             "Name": title,
@@ -453,22 +456,46 @@ def scrape_page(url: str):
             "Role":    inf_map.get("Role",""),
             "Primary Role": roles.get("primary",""),
             "Secondary Role": roles.get("secondary",""),
-            "Overall": f"{intro}\n\n{personality}".strip(),
-            "Personality": personality,
-            "Background":  extract_section_text(soup, ["Background","Story"]),
-            "Quotes":      extract_quotes(soup),
-            "Trivia":      extract_section_text(soup, ["Trivia"]),
+            "Overall_EN": f"{intro}\n\n{personality}".strip(),
+            "Overall_VN": "",
+            "Personality_EN": personality,
+            "Personality_VN": "",
+            "Background_EN":  extract_section_text(soup, ["Background","Story"]),
+            "Background_VN": "",
+            "Quotes_EN":      extract_quotes(soup),
+            "Quotes_VN":      "",
+            "Trivia_EN":      extract_section_text(soup, ["Trivia"]),
+            "Trivia_VN":      "",
             "URL": url,
         }
 
+        # Process Sub-lists to have _EN / _VN
         skills = extract_skills(soup)
         for s in skills:
             s["Hero"] = title
             s.setdefault("Type","")
+            # Rename Description -> Description_EN
+            desc = s.pop("Description", "")
+            s["Description_EN"] = desc
+            s["Description_VN"] = ""
 
         engraving_rows = extract_engraving_rows(soup, title)
+        for r in engraving_rows:
+            desc = r.pop("Description", "")
+            r["Description_EN"] = desc
+            r["Description_VN"] = ""
+
         signature_rows = extract_signature_rows(soup, title)
+        for r in signature_rows:
+            desc = r.pop("Description", "")
+            r["Description_EN"] = desc
+            r["Description_VN"] = ""
+
         furniture_rows = extract_furniture_rows(soup, title)
+        for r in furniture_rows:
+            desc = r.pop("Description", "")
+            r["Description_EN"] = desc
+            r["Description_VN"] = ""
         
         # --- Translation ---
         # Removed per user request
@@ -545,7 +572,7 @@ def create_excel(heroes, skills, engraving_rows, signature_rows, furniture_rows,
     wb = Workbook()
 
     # Heroes
-    hero_cols = ["Icon","Name","Faction","Type","Class","Rarity","Role",
+    hero_cols = ["ID","Icon","Name","Faction","Type","Class","Rarity","Role",
                  "Primary Role","Secondary Role",
                  "Overall","Personality","Background","Quotes","Trivia","URL"]
     ws1 = wb.active; ws1.title = "Heroes"
@@ -555,27 +582,27 @@ def create_excel(heroes, skills, engraving_rows, signature_rows, furniture_rows,
 
     # Skills
     ws2 = wb.create_sheet("Skills")
-    ws2.append(["Hero","Unlock Level","Skill Name","Type","Description"])
+    ws2.append(["Hero", "Hero ID", "Unlock Level","Skill Name","Type","Description"])
     for s in skills:
-        ws2.append([s.get("Hero",""), s.get("Unlock Level",""), s.get("Skill Name",""), s.get("Type",""), s.get("Description","")])
+        ws2.append([s.get("Hero",""), s.get("Hero ID",""), s.get("Unlock Level",""), s.get("Skill Name",""), s.get("Type",""), s.get("Description","")])
 
     # Engraving Abilities
     ws3 = wb.create_sheet("Engraving Abilities")
-    ws3.append(["Hero","Skill Name","Unlock Level","Description"])
+    ws3.append(["Hero", "Hero ID", "Skill Name","Unlock Level","Description"])
     for r in engraving_rows:
-        ws3.append([r.get("Hero",""), r.get("Skill Name",""), r.get("Unlock Level",""), r.get("Description","")])
+        ws3.append([r.get("Hero",""), r.get("Hero ID",""), r.get("Skill Name",""), r.get("Unlock Level",""), r.get("Description","")])
 
     # Signature Item
     ws4 = wb.create_sheet("Signature Item")
-    ws4.append(["Hero","Description"])
+    ws4.append(["Hero", "Hero ID", "Description"])
     for r in signature_rows:
-        ws4.append([r.get("Hero",""), r.get("Description","")])
+        ws4.append([r.get("Hero",""), r.get("Hero ID",""), r.get("Description","")])
 
     # Furniture Set Bonuses
     ws5 = wb.create_sheet("Furniture Set Bonuses")
-    ws5.append(["Hero","Name","Description"])
+    ws5.append(["Hero", "Hero ID", "Name","Description"])
     for r in furniture_rows:
-        ws5.append([r.get("Hero",""), r.get("Name",""), r.get("Description","")])
+        ws5.append([r.get("Hero",""), r.get("Hero ID",""), r.get("Name",""), r.get("Description","")])
 
     wb.save(output_path)
     return output_path
